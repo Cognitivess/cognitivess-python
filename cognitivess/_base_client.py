@@ -34,6 +34,38 @@ RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
 _ENV_API_KEY = "COGNITIVESS_API_KEY"
 
 
+def _load_env_file(path: str) -> None:
+    """Parser .env minimal, fara dependinta de python-dotenv.
+
+    Citeste ``path`` (de ex ``.env`` din cwd) si seteaza in ``os.environ`` DOAR
+    cheile care nu sunt deja definite. Suporta: ``KEY=VALUE``, comentarii ``#``,
+    prefix ``export``, ghilimele simple/duble. Nu suprascrie env-ul existent si
+    nu ridica niciodata exceptie — daca fisierul lipseste sau e invalid, e no-op.
+    """
+    if not path or not os.path.isfile(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export "):].lstrip()
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                if not key or key in os.environ:
+                    continue
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                os.environ[key] = value
+    except Exception:
+        return
+
+
 def _json_or_text(resp: httpx.Response):
     """Parseaza corpul unui response de succes. JSON -> dict/list, altfel
     string-ul raw, altfel None (ex: 204 No Content). Nu ridica niciodata
@@ -62,8 +94,11 @@ class _BaseClient:
         timeout: float = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
         default_headers: Optional[Dict[str, str]] = None,
+        env_file: Optional[str] = ".env",
     ):
         if api_key is None:
+            if env_file:
+                _load_env_file(env_file)
             api_key = os.environ.get(_ENV_API_KEY)
         if not api_key:
             raise ValueError(

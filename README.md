@@ -11,18 +11,30 @@ pip install cognitivess
 * Sync **and** async clients (`Cognitivess` / `AsyncCognitivess`)
 * Streaming (SSE) for chat, messages and responses
 * Structured Outputs (`response_format`) pass-through
-* Typed exceptions, retries with backoff, timeout control
+* Typed exceptions, retries with backoff (honors `Retry-After`), timeout control
+* Reads `.env` automatically (no `python-dotenv` dependency)
 * Zero heavy deps — only `httpx`
 
 ## Setup
 
 Generate an API key in your CognitivessAI dashboard (looks like
-`ssh-ed25519 AAAA...`). It's shown only once. Then either pass it explicitly or
-export it:
+`ssh-ed25519 AAAA...`). It's shown only once. Then either pass it explicitly,
+export it, **or** put it in a `.env` file — the SDK reads `.env` automatically
+(no `python-dotenv` / `load_dotenv()` needed):
 
 ```bash
 export COGNITIVESS_API_KEY="ssh-ed25519 AAAA..."
 ```
+
+```dotenv
+# .env  (in your project root / cwd)
+COGNITIVESS_API_KEY=ssh-ed25519 AAAA...
+```
+
+The `.env` fallback only fills in variables that aren't already set in the
+environment, so explicit env vars or `api_key=` always win. Disable it with
+`Cognitivess(env_file=None)`, or point elsewhere with
+`Cognitivess(env_file="config/.env")`.
 
 ## Quickstart
 
@@ -157,6 +169,7 @@ cog = Cognitivess(
     timeout=60.0,             # seconds
     max_retries=2,            # retries on 429/5xx/conn errors, with backoff
     default_headers={"X-Tag": "prod"},  # merged into every request
+    env_file=".env",          # auto-load .env (default); None to disable
 )
 ```
 

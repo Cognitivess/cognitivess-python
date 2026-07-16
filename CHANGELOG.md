@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.3
+
+### Added
+- **Automatic `.env` loading.** `Cognitivess()` now reads a `.env` file from the
+  cwd as a fallback when `COGNITIVESS_API_KEY` isn't already in the environment —
+  no `python-dotenv` / `load_dotenv()` needed. Existing env vars are never
+  overridden. Control via the new `env_file` constructor argument (default
+  `".env"`; pass `None` to disable, or a path to point elsewhere). Built-in
+  parser, so the SDK stays zero-heavy-deps (`httpx` only).
+
+### Tests
+- Added tests for `.env` fallback, no-override behavior, and missing-file no-op.
+
 ## 0.1.2
 
 ### Fixed
