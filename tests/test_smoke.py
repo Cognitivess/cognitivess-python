@@ -131,3 +131,71 @@ def test_async_post_is_coroutine():
     cog = AsyncCognitivess(api_key="ssh-ed25519 test")
     assert inspect.iscoroutinefunction(cog._post)
     asyncio.run(cog.aclose())
+
+
+def test_json_or_text_handles_empty_and_non_json():
+    import httpx
+    from cognitivess._base_client import _json_or_text
+
+    empty = httpx.Response(204, content=b"")
+    assert _json_or_text(empty) is None
+
+    plain = httpx.Response(200, content=b"hello world", headers={"content-type": "text/plain"})
+    assert _json_or_text(plain) == "hello world"
+
+    js = httpx.Response(200, content=b'{"ok": true}')
+    assert _json_or_text(js) == {"ok": True}
+
+
+def test_stream_raises_with_error_body(monkeypatch):
+    """Bug #1: pe status non-2xx in stream, mesajul de eroare trebuie sa ajunga
+    la exceptie (nu se pierde prin ResponseNotRead)."""
+    import httpx
+    from cognitivess import AuthenticationError
+
+    cog = Cognitivess(api_key="ssh-ed25519 test")
+
+    error_body = b'{"error":{"message":"bad key boom","type":"invalid_request_error"}}'
+
+    class FakeStream:
+        def __init__(self, resp):
+            self._resp = resp
+
+        def __enter__(self):
+            return self._resp
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_stream(method, url, **kwargs):
+        resp = httpx.Response(401, content=error_body, request=httpx.Request(method, url))
+        return FakeStream(resp)
+
+    monkeypatch.setattr(cog._http, "stream", fake_stream)
+
+    gen = cog.chat.completions.create(
+        model="Cognitivess-1", messages=[{"role": "user", "content": "hi"}], stream=True
+    )
+    with pytest.raises(AuthenticationError) as ei:
+        list(gen)
+    assert "bad key boom" in ei.value.message
+    cog.close()
+
+
+def test_retry_after_header_honored(monkeypatch):
+    """Bug #5: Retry-After (secunde) este respectat, nu se doarme fix 2**n."""
+    import httpx
+    from cognitivess._base_client import _BaseClient
+
+    seen = {"calls": 0}
+    slept = []
+
+    resp = httpx.Response(
+        429,
+        content=b'{"error":{"message":"slow down"}}',
+        headers={"retry-after": "7"},
+    )
+    assert _BaseClient._retry_delay(resp, 0) == 7.0
+    # fara header -> backoff in [base, base+0.25]
+    d = _BaseClient._retry_delay(None, 1)
+    assert 1.0 <= d <= 1.25

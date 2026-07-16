@@ -1,7 +1,7 @@
 """Chat completions — endpoint OpenAI-compatible ``POST /chat/completions``."""
 
 from __future__ import annotations
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
 
 class Completions:
