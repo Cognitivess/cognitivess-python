@@ -23,13 +23,11 @@ Exemplu::
 
 from __future__ import annotations
 
-from ._base_client import SyncAPIClient, AsyncAPIClient
+from ._base_client import SyncAPIClient, AsyncAPIClient, DEFAULT_BASE_URL
 from .resources.chat import Chat
 from .resources.messages import Messages
 from .resources.models import Models
 from .resources.responses import Responses
-
-DEFAULT_BASE_URL = "https://api.cognitivess.com/v1"
 
 
 class Cognitivess(SyncAPIClient):
@@ -39,7 +37,7 @@ class Cognitivess(SyncAPIClient):
         self,
         *,
         api_key: str | None = None,
-        base_url: str = DEFAULT_BASE_URL,
+        base_url: str | None = None,
         timeout: float = 60.0,
         max_retries: int = 2,
         default_headers: dict | None = None,
@@ -66,7 +64,7 @@ class AsyncCognitivess(AsyncAPIClient):
         self,
         *,
         api_key: str | None = None,
-        base_url: str = DEFAULT_BASE_URL,
+        base_url: str | None = None,
         timeout: float = 60.0,
         max_retries: int = 2,
         default_headers: dict | None = None,

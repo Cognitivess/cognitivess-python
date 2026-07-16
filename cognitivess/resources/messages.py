@@ -22,13 +22,15 @@ class Messages:
         max_tokens: int,
         system: Optional[Any] = None,
         stream: bool = False,
+        timeout: Optional[float] = None,
         **kwargs: Any,
     ):
         """Creeaza un mesaj in stil Anthropic. Oglinda ``anthropic.messages.create``.
 
         ``system`` poate fi string sau lista de content blocks. ``tools``,
         ``tool_choice``, ``temperature``, ``top_p``, ``stop_sequences``, ``metadata``
-        etc. sunt pasate direct.
+        etc. sunt pasate direct. ``timeout`` (optional, secunde) suprascrie
+        timeout-ul clientului doar pentru aceasta cerere.
         """
         body: dict = {"model": model, "messages": list(messages), "max_tokens": max_tokens, **kwargs}
         if system is not None:
@@ -36,5 +38,5 @@ class Messages:
         headers = self._headers_for()
         if stream:
             body["stream"] = True
-            return self._client._stream("POST", "/messages", body, headers=headers)
-        return self._client._post("/messages", body, headers=headers)
+            return self._client._stream("POST", "/messages", body, headers=headers, timeout=timeout)
+        return self._client._post("/messages", body, headers=headers, timeout=timeout)
