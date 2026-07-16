@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5
+
+### Docs
+- Refreshed README: the feature list now covers `iter_text()`, per-request
+  `timeout`, `models.retrieve()`, `COGNITIVESS_BASE_URL` from env, `Retry-After`,
+  and the `py.typed` marker; added a CHANGELOG link and clarified that
+  `iter_text()` streams under the hood (no `stream=True` needed).
+
 ## 0.1.4
 
 ### Added

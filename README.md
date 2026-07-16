@@ -9,11 +9,17 @@ pip install cognitivess
 ```
 
 * Sync **and** async clients (`Cognitivess` / `AsyncCognitivess`)
-* Streaming (SSE) for chat, messages and responses
+* Streaming (SSE) for chat, messages and responses, plus an `iter_text()` helper
+  that yields just the content strings
 * Structured Outputs (`response_format`) pass-through
-* Typed exceptions, retries with backoff (honors `Retry-After`), timeout control
-* Reads `.env` automatically (no `python-dotenv` dependency)
-* Zero heavy deps — only `httpx`
+* Typed exceptions, retries with backoff (honors `Retry-After`), per-request
+  `timeout` override
+* Reads `.env` automatically — `COGNITIVESS_API_KEY` and `COGNITIVESS_BASE_URL`
+  (no `python-dotenv` dependency)
+* `models.list()` and `models.retrieve(id)`
+* Zero heavy deps — only `httpx` · ships `py.typed`
+
+> See [`CHANGELOG.md`](CHANGELOG.md) for what's new per version.
 
 ## Setup
 
@@ -85,8 +91,10 @@ for chunk in cog.chat.completions.create(
         print(delta, end="", flush=True)
 ```
 
-**`iter_text()`** — convenience that yields just the content strings (skips
-metadata / empty chunks), sync and async:
+**`iter_text()`** — convenience that streams under the hood (it sets
+`stream=True` for you) and yields just the content strings, skipping metadata /
+empty chunks. Sync (`for`) and async (`async for`). Don't pass `stream=True` to
+it — it streams already.
 
 ```python
 for text in cog.chat.completions.iter_text(
@@ -95,6 +103,7 @@ for text in cog.chat.completions.iter_text(
     max_tokens=64,
 ):
     print(text, end="", flush=True)
+# 1 2 3 4 5
 ```
 
 ```python
@@ -215,10 +224,11 @@ except APIStatusError as e:         # any other non-2xx
   `curl | sh`) is a separate tool; installing this SDK does not register a
   `cognitivess` console command, so the two coexist without conflict.
 * `base_url` already includes `/v1`. The SDK calls `/chat/completions`,
-  `/messages`, `/models`, `/responses` relative to it. For self-hosted/dev,
-  point it at e.g. `http://localhost:8000/v1`.
+  `/messages`, `/models`, `/responses` relative to it. It defaults to
+  `COGNITIVESS_BASE_URL` (env / `.env`) then `https://api.cognitivess.com/v1`.
+  For self-hosted/dev, point it at e.g. `http://localhost:8000/v1`.
 * Responses objects are attribute-accessible (`resp.choices[0].message.content`)
-  via a light wrapper — no Pydantic dependency.
+  via a light wrapper — no Pydantic dependency. A `py.typed` marker is shipped.
 
 ## License
 
