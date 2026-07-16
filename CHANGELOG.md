@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.6
+
+### Fixed
+- **Streaming now retries retryable status codes.** Previously only non-streaming
+  requests retried on `429/500/502/503/504/408/409`; a streaming request that got
+  one of these at connection time failed immediately (1 attempt regardless of
+  `max_retries`). `_stream` (sync + async) now retries the same set as `_request`,
+  honoring `Retry-After`. Retry happens **only before the first `yield`**, so a
+  transient failure at stream open is retried safely with no risk of duplicating
+  output to the consumer.
+- **Mid-stream connection errors now surface as `APIConnectionError`** (part of
+  the `CognitivessError` hierarchy) instead of leaking as a raw `httpx` exception.
+  They are never retried (output may already have been produced).
+- Timeouts (open or mid-stream) are still not retried, matching `_request`.
+
+### Tests
+- Added regression tests for streaming retry on retryable status, no-retry on
+  non-retryable status, and no-retry / no-duplicate after the first chunk.
+
 ## 0.1.5
 
 ### Docs

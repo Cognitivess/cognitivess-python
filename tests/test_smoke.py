@@ -347,3 +347,167 @@ def test_models_retrieve(monkeypatch):
 def test_py_typed_shipped():
     import cognitivess, os
     assert os.path.exists(os.path.join(os.path.dirname(cognitivess.__file__), "py.typed"))
+
+
+def _patch_no_sleep(monkeypatch):
+    import cognitivess._base_client as bc
+    monkeypatch.setattr(bc.time, "sleep", lambda *a, **k: None)
+
+
+def test_stream_retries_on_retryable_status(monkeypatch):
+    """Un 503 la deschiderea stream-ului trebuie reincerca de max_retries ori
+    inainte de a renunta — nu o singura data."""
+    import httpx
+    from cognitivess import APIStatusError
+    _patch_no_sleep(monkeypatch)
+
+    cog = Cognitivess(api_key="ssh-ed25519 test", max_retries=3)
+    calls = {"n": 0}
+
+    class FakeStream:
+        def __init__(self, resp):
+            self._r = resp
+
+        def __enter__(self):
+            return self._r
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_stream(method, url, **kwargs):
+        calls["n"] += 1
+        return FakeStream(httpx.Response(503, content=b'{"error":{"message":"boom"}}', request=httpx.Request(method, url)))
+
+    cog._http.stream = fake_stream
+    with pytest.raises(APIStatusError):
+        list(cog.chat.completions.create(
+            model="Cognitivess-1", messages=[{"role": "user", "content": "hi"}], stream=True,
+        ))
+    # 1 initial + 3 retry = 4 incercari
+    assert calls["n"] == 4
+    cog.close()
+
+
+def test_stream_no_retry_on_non_retryable_status(monkeypatch):
+    """Un 400 (non-retryable) nu trebuie sa declanseze retry."""
+    import httpx
+    from cognitivess import APIStatusError
+    _patch_no_sleep(monkeypatch)
+
+    cog = Cognitivess(api_key="ssh-ed25519 test", max_retries=3)
+    calls = {"n": 0}
+
+    class FakeStream:
+        def __init__(self, resp):
+            self._r = resp
+
+        def __enter__(self):
+            return self._r
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_stream(method, url, **kwargs):
+        calls["n"] += 1
+        return FakeStream(httpx.Response(400, content=b'{"error":{"message":"bad req"}}', request=httpx.Request(method, url)))
+
+    cog._http.stream = fake_stream
+    with pytest.raises(APIStatusError):
+        list(cog.chat.completions.create(
+            model="Cognitivess-1", messages=[{"role": "user", "content": "hi"}], stream=True,
+        ))
+    assert calls["n"] == 1  # fara retry
+    cog.close()
+
+
+def test_stream_retries_then_succeeds(monkeypatch):
+    """503 la prima incercare, apoi 200 cu evenimente — consumatorul primeste
+    output-ul o singura data, fara duplicate."""
+    import httpx
+    _patch_no_sleep(monkeypatch)
+
+    cog = Cognitivess(api_key="ssh-ed25519 test", max_retries=3)
+
+    class FakeStream:
+        def __init__(self, resp):
+            self._r = resp
+
+        def __enter__(self):
+            return self._r
+
+        def __exit__(self, *exc):
+            return False
+
+    responses = iter([
+        httpx.Response(503, content=b'{"error":{"message":"slow"}}', request=httpx.Request("POST", "u")),
+        httpx.Response(
+            200,
+            content=b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n',
+            headers={"content-type": "text/event-stream"},
+            request=httpx.Request("POST", "u"),
+        ),
+    ])
+
+    def fake_stream(method, url, **kwargs):
+        return FakeStream(next(responses))
+
+    cog._http.stream = fake_stream
+    out = "".join(
+        chunk.choices[0].delta.content
+        for chunk in cog.chat.completions.create(
+            model="Cognitivess-1", messages=[{"role": "user", "content": "hi"}], stream=True,
+        )
+    )
+    assert out == "Hi"
+    cog.close()
+
+
+def test_stream_no_retry_after_first_yield(monkeypatch):
+    """Dupa ce am yield-uit primul chunk, o eroare mid-stream nu se reincearca
+    (altfel am duplica output-ul). Se propaga ca APIConnectionError."""
+    import httpx
+    from cognitivess import APIConnectionError
+    _patch_no_sleep(monkeypatch)
+
+    cog = Cognitivess(api_key="ssh-ed25519 test", max_retries=4)
+    calls = {"n": 0}
+
+    class FakeStream:
+        def __init__(self, resp):
+            self._r = resp
+
+        def __enter__(self):
+            return self._r
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_stream(method, url, **kwargs):
+        calls["n"] += 1
+        return FakeStream(httpx.Response(
+            200,
+            content=b'data: {"choices":[{"delta":{"content":"A"}}]}\n\n',
+            headers={"content-type": "text/event-stream"},
+            request=httpx.Request(method, url),
+        ))
+
+    cog._http.stream = fake_stream
+
+    def fail_iter_lines():
+        yield "data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}"
+        # dupa primul yield, conexiunea cade mid-stream
+        raise httpx.ReadError("connection dropped")
+
+    import cognitivess._base_client as bc
+    monkeypatch.setattr(httpx.Response, "iter_lines", lambda self: fail_iter_lines())
+
+    gen = cog.chat.completions.create(
+        model="Cognitivess-1", messages=[{"role": "user", "content": "hi"}], stream=True,
+    )
+    out = []
+    with pytest.raises(APIConnectionError):
+        for chunk in gen:
+            out.append(chunk.choices[0].delta.content)
+    assert out == ["A"]  # output-ul primit pana la cadere, fara duplicare
+    assert calls["n"] == 1  # nu s-a reincearca mid-stream
+    cog.close()

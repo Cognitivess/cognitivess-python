@@ -278,19 +278,44 @@ class SyncAPIClient(_BaseClient):
         return self._request("GET", path, params=params, headers=headers, timeout=timeout)
 
     def _stream(self, method: str, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None):
-        """Generator de evenimente SSE. Yield-uieste AttrDict per payload `data:`."""
+        """Generator de evenimente SSE. Yield-uieste AttrDict per payload `data:`.
+
+        Retry pe status-uri retryable (429/502/503/504/408/409/500) si pe erori
+        de conexiune la deschidere — dar DOAR inainte de primul ``yield``. Dupa
+        ce am inceput sa yield-uiesc evenimente, orice eroare se propaga ca
+        :class:`APIConnectionError` (fara retry) ca sa nu duplicam output-ul
+        consumatorului. Timeout-urile nu se reincearca (consistent cu _request).
+        """
         url = self._url(path)
         req_timeout = timeout if timeout is not None else self.timeout
-        with self._http.stream(method, url, json=body, headers=self._headers(headers), timeout=req_timeout) as resp:
-            if not resp.is_success:
-                resp.read()  # corpul trebuie citit inainte de .json()/.text()
-                self._raise_for_status(resp)
-            for line in resp.iter_lines():
-                parsed = self._parse_sse_line(line)
-                if parsed == "DONE":
-                    break
-                if parsed is not None:
-                    yield parsed
+        for attempt in range(self.max_retries + 1):
+            yielded = False
+            try:
+                with self._http.stream(method, url, json=body, headers=self._headers(headers), timeout=req_timeout) as resp:
+                    if not resp.is_success:
+                        resp.read()  # corpul trebuie citit inainte de .json()/.text()
+                        if resp.status_code in RETRYABLE_STATUS and attempt < self.max_retries:
+                            time.sleep(self._retry_delay(resp, attempt))
+                            continue  # iese din with (inchide stream-ul) si reincearca
+                        self._raise_for_status(resp)
+                    for line in resp.iter_lines():
+                        parsed = self._parse_sse_line(line)
+                        if parsed == "DONE":
+                            return
+                        if parsed is not None:
+                            yielded = True
+                            yield parsed
+                    return
+            except httpx.TimeoutException as e:
+                # Timeout (deschidere sau mid-stream) — nu reincearcam, la fel ca _request.
+                raise APITimeoutError(str(e) or "Request timed out", cause=e) from e
+            except httpx.HTTPError as e:
+                # Eroare de conexiune: retry doar daca inca nu am yield-uit nimic.
+                if not yielded and attempt < self.max_retries:
+                    time.sleep(self._retry_delay(None, attempt))
+                    continue
+                raise APIConnectionError(str(e) or "Connection error", cause=e) from e
+        raise APIConnectionError("Request failed")
 
 
 class AsyncAPIClient(_BaseClient):
@@ -353,16 +378,36 @@ class AsyncAPIClient(_BaseClient):
     async def _stream(
         self, method: str, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None
     ) -> AsyncIterator:
-        """Generator async de evenimente SSE."""
+        """Generator async de evenimente SSE.
+
+        Vezi :meth:`SyncAPIClient._stream` pentru semantica de retry (doar
+        inainte de primul yield; timeout-urile nu se reincearca).
+        """
         url = self._url(path)
         req_timeout = timeout if timeout is not None else self.timeout
-        async with self._http.stream(method, url, json=body, headers=self._headers(headers), timeout=req_timeout) as resp:
-            if not resp.is_success:
-                await resp.aread()  # corpul trebuie citit inainte de .json()/.text()
-                self._raise_for_status(resp)
-            async for line in resp.aiter_lines():
-                parsed = self._parse_sse_line(line)
-                if parsed == "DONE":
-                    break
-                if parsed is not None:
-                    yield parsed
+        for attempt in range(self.max_retries + 1):
+            yielded = False
+            try:
+                async with self._http.stream(method, url, json=body, headers=self._headers(headers), timeout=req_timeout) as resp:
+                    if not resp.is_success:
+                        await resp.aread()  # corpul trebuie citit inainte de .json()/.text()
+                        if resp.status_code in RETRYABLE_STATUS and attempt < self.max_retries:
+                            await asyncio.sleep(self._retry_delay(resp, attempt))
+                            continue  # iese din async with (inchide stream-ul) si reincearca
+                        self._raise_for_status(resp)
+                    async for line in resp.aiter_lines():
+                        parsed = self._parse_sse_line(line)
+                        if parsed == "DONE":
+                            return
+                        if parsed is not None:
+                            yielded = True
+                            yield parsed
+                    return
+            except httpx.TimeoutException as e:
+                raise APITimeoutError(str(e) or "Request timed out", cause=e) from e
+            except httpx.HTTPError as e:
+                if not yielded and attempt < self.max_retries:
+                    await asyncio.sleep(self._retry_delay(None, attempt))
+                    continue
+                raise APIConnectionError(str(e) or "Connection error", cause=e) from e
+        raise APIConnectionError("Request failed")
