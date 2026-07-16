@@ -8,10 +8,12 @@ si async pe :class:`AsyncAPIClient`. Astfel codul de resurse e comun.
 from __future__ import annotations
 
 import asyncio
+import email.utils
 import json
 import os
+import random
 import time
-from typing import Any, Dict, Iterator, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 import httpx
 
@@ -30,6 +32,21 @@ DEFAULT_MAX_RETRIES = 2
 RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
 
 _ENV_API_KEY = "COGNITIVESS_API_KEY"
+
+
+def _json_or_text(resp: httpx.Response):
+    """Parseaza corpul unui response de succes. JSON -> dict/list, altfel
+    string-ul raw, altfel None (ex: 204 No Content). Nu ridica niciodata
+    JSONDecodeError in afara ierarhiei CognitivessError."""
+    if resp.status_code == 204 or not resp.content:
+        return None
+    try:
+        return resp.json()
+    except Exception:
+        try:
+            return resp.text
+        except Exception:
+            return None
 
 
 class _BaseClient:
@@ -82,9 +99,31 @@ class _BaseClient:
         return h
 
     @staticmethod
-    def _raise_for_status(resp: httpx.Response) -> None:
-        if resp.is_success:
-            return
+    def _retry_delay(resp: Optional[httpx.Response], attempt: int) -> float:
+        """Backoff pentru retry. Honoreaza ``Retry-After`` (secunde sau HTTP-date),
+        altfel exponential cu jitter. ``attempt`` e 0-indexat."""
+        if resp is not None:
+            retry_after = resp.headers.get("retry-after") or resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return max(0.0, float(retry_after))
+                except ValueError:
+                    pass
+                try:  # HTTP-date format
+                    parsed = email.utils.parsedate_to_datetime(retry_after)
+                    delta = parsed.timestamp() - time.time()
+                    if delta > 0:
+                        return delta
+                except Exception:
+                    pass
+        # exponential cu jitter full, capat la ~8s
+        base = min(0.5 * (2 ** attempt), 8.0)
+        return base + random.uniform(0, 0.25)
+
+    @staticmethod
+    def _extract_message(resp: httpx.Response):
+        """Extrage mesajul de eroare dintr-un response deja citit. Pentru
+        streaming, apelantul trebuie sa fi facut ``read()``/``aread()`` inainte."""
         try:
             body = resp.json()
         except Exception:
@@ -102,6 +141,13 @@ class _BaseClient:
                 message = resp.text
             except Exception:
                 message = resp.reason_phrase
+        return message, body
+
+    @staticmethod
+    def _raise_for_status(resp: httpx.Response) -> None:
+        if resp.is_success:
+            return
+        message, body = _BaseClient._extract_message(resp)
         status = resp.status_code
         if status == 401:
             raise AuthenticationError(message or "Unauthorized", status_code=status, body=body)
@@ -136,7 +182,9 @@ class SyncAPIClient(_BaseClient):
     _is_async = False
 
     def _make_http(self) -> httpx.Client:
-        return httpx.Client(timeout=self.timeout)
+        # connect scurt, read = self.timeout. read-ul mare tine si in streaming
+        # (model de reasoning cu pauze lungi intre evenimentele SSE).
+        return httpx.Client(timeout=httpx.Timeout(self.timeout, connect=10.0))
 
     def close(self) -> None:
         self._http.close()
@@ -168,14 +216,14 @@ class SyncAPIClient(_BaseClient):
             except httpx.HTTPError as e:
                 last_exc = e
                 if attempt < self.max_retries:
-                    time.sleep(0.5 * (2 ** attempt))
+                    time.sleep(self._retry_delay(None, attempt))
                     continue
                 raise APIConnectionError(str(e) or "Connection error", cause=e) from e
             if resp.status_code in RETRYABLE_STATUS and attempt < self.max_retries:
-                time.sleep(0.5 * (2 ** attempt))
+                time.sleep(self._retry_delay(resp, attempt))
                 continue
             self._raise_for_status(resp)
-            return _to_attrdict(resp.json())
+            return _to_attrdict(_json_or_text(resp))
         raise APIConnectionError(str(last_exc) if last_exc else "Request failed")
 
     def _post(self, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None):
@@ -188,7 +236,9 @@ class SyncAPIClient(_BaseClient):
         """Generator de evenimente SSE. Yield-uieste AttrDict per payload `data:`."""
         url = self._url(path)
         with self._http.stream(method, url, json=body, headers=self._headers(headers)) as resp:
-            self._raise_for_status(resp)
+            if not resp.is_success:
+                resp.read()  # corpul trebuie citit inainte de .json()/.text()
+                self._raise_for_status(resp)
             for line in resp.iter_lines():
                 parsed = self._parse_sse_line(line)
                 if parsed == "DONE":
@@ -203,7 +253,7 @@ class AsyncAPIClient(_BaseClient):
     _is_async = True
 
     def _make_http(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=self.timeout)
+        return httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=10.0))
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -235,14 +285,14 @@ class AsyncAPIClient(_BaseClient):
             except httpx.HTTPError as e:
                 last_exc = e
                 if attempt < self.max_retries:
-                    await asyncio.sleep(0.5 * (2 ** attempt))
+                    await asyncio.sleep(self._retry_delay(None, attempt))
                     continue
                 raise APIConnectionError(str(e) or "Connection error", cause=e) from e
             if resp.status_code in RETRYABLE_STATUS and attempt < self.max_retries:
-                await asyncio.sleep(0.5 * (2 ** attempt))
+                await asyncio.sleep(self._retry_delay(resp, attempt))
                 continue
             self._raise_for_status(resp)
-            return _to_attrdict(resp.json())
+            return _to_attrdict(_json_or_text(resp))
         raise APIConnectionError(str(last_exc) if last_exc else "Request failed")
 
     async def _post(self, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None):
@@ -257,7 +307,9 @@ class AsyncAPIClient(_BaseClient):
         """Generator async de evenimente SSE."""
         url = self._url(path)
         async with self._http.stream(method, url, json=body, headers=self._headers(headers)) as resp:
-            self._raise_for_status(resp)
+            if not resp.is_success:
+                await resp.aread()  # corpul trebuie citit inainte de .json()/.text()
+                self._raise_for_status(resp)
             async for line in resp.aiter_lines():
                 parsed = self._parse_sse_line(line)
                 if parsed == "DONE":
