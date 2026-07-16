@@ -29,6 +29,7 @@ export COGNITIVESS_API_KEY="ssh-ed25519 AAAA..."
 ```dotenv
 # .env  (in your project root / cwd)
 COGNITIVESS_API_KEY=ssh-ed25519 AAAA...
+# COGNITIVESS_BASE_URL=https://api.cognitivess.com/v1   # optional, for self-hosted/dev
 ```
 
 The `.env` fallback only fills in variables that aren't already set in the
@@ -72,7 +73,7 @@ print(msg.content[0].text)
 ### Streaming
 
 ```python
-# sync
+# sync — raw chunks
 for chunk in cog.chat.completions.create(
     model="Cognitivess-1",
     messages=[{"role": "user", "content": "Count to 5."}],
@@ -82,6 +83,18 @@ for chunk in cog.chat.completions.create(
     delta = chunk.choices[0].delta.content
     if delta:
         print(delta, end="", flush=True)
+```
+
+**`iter_text()`** — convenience that yields just the content strings (skips
+metadata / empty chunks), sync and async:
+
+```python
+for text in cog.chat.completions.iter_text(
+    model="Cognitivess-1",
+    messages=[{"role": "user", "content": "Count to 5."}],
+    max_tokens=64,
+):
+    print(text, end="", flush=True)
 ```
 
 ```python
@@ -158,6 +171,9 @@ print(r.output_text)
 
 ```python
 print(cog.models.list().data[0].id)
+
+# single model
+print(cog.models.retrieve("Cognitivess-1").id)
 ```
 
 ## Configuration
@@ -165,12 +181,15 @@ print(cog.models.list().data[0].id)
 ```python
 cog = Cognitivess(
     api_key="...",            # optional, defaults to COGNITIVESS_API_KEY
-    base_url="https://api.cognitivess.com/v1",  # override for self-hosted/dev
+    base_url="...",           # optional, defaults to COGNITIVESS_BASE_URL then the API
     timeout=60.0,             # seconds
     max_retries=2,            # retries on 429/5xx/conn errors, with backoff
     default_headers={"X-Tag": "prod"},  # merged into every request
     env_file=".env",          # auto-load .env (default); None to disable
 )
+
+# Per-request timeout override (not sent in the JSON body):
+cog.chat.completions.create(..., timeout=120)
 ```
 
 ## Error handling

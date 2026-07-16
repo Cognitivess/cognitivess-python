@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.4
+
+### Added
+- **`COGNITIVESS_BASE_URL` from env.** `base_url` now resolves from
+  env / `.env` as a fallback (explicit `base_url=` still wins), so self-hosted/dev
+  setups need no `base_url=` in code.
+- **`iter_text()` streaming helper** on `chat.completions` — yields only the
+  content strings, skipping metadata / empty-choice chunks. Sync (`for text in …`)
+  and async (`async for text in …`) aware. Removes the
+  `if chunk.choices: getattr(delta, "content", None)` boilerplate.
+- **Per-request `timeout`.** `create(..., timeout=30)` overrides the client
+  timeout for a single call (not sent in the JSON body). Available on chat,
+  messages, responses, and `models.retrieve`.
+- **`models.retrieve(id)`** — `GET /models/{id}` for a single model.
+- **`py.typed`** marker shipped in the wheel so IDEs/type-checkers treat the
+  package as typed.
+
+### Changed
+- `.env` is now loaded early (before resolving both `api_key` and `base_url`),
+  so `COGNITIVESS_BASE_URL` in `.env` works too. Existing env vars are still
+  never overridden.
+
 ## 0.1.3
 
 ### Added

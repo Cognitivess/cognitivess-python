@@ -31,7 +31,10 @@ DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 2
 RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
 
+DEFAULT_BASE_URL = "https://api.cognitivess.com/v1"
+
 _ENV_API_KEY = "COGNITIVESS_API_KEY"
+_ENV_BASE_URL = "COGNITIVESS_BASE_URL"
 
 
 def _load_env_file(path: str) -> None:
@@ -90,15 +93,17 @@ class _BaseClient:
         self,
         *,
         api_key: Optional[str] = None,
-        base_url: str,
+        base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
         default_headers: Optional[Dict[str, str]] = None,
         env_file: Optional[str] = ".env",
     ):
+        # .env se incarca devreme, ca si COGNITIVESS_BASE_URL sa poata fi
+        # rezolvat din fisier. Nu suprascrie env-ul deja definit.
+        if env_file:
+            _load_env_file(env_file)
         if api_key is None:
-            if env_file:
-                _load_env_file(env_file)
             api_key = os.environ.get(_ENV_API_KEY)
         if not api_key:
             raise ValueError(
@@ -106,6 +111,8 @@ class _BaseClient:
                 f"{_ENV_API_KEY} in env."
             )
         self.api_key = api_key
+        if not base_url:
+            base_url = os.environ.get(_ENV_BASE_URL) or DEFAULT_BASE_URL
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
@@ -238,13 +245,16 @@ class SyncAPIClient(_BaseClient):
         body: Any = None,
         params: Any = None,
         headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
     ):
         url = self._url(path)
         last_exc: Optional[Exception] = None
+        req_timeout = timeout if timeout is not None else self.timeout
         for attempt in range(self.max_retries + 1):
             try:
                 resp = self._http.request(
-                    method, url, json=body, params=params, headers=self._headers(headers)
+                    method, url, json=body, params=params,
+                    headers=self._headers(headers), timeout=req_timeout,
                 )
             except httpx.TimeoutException as e:
                 raise APITimeoutError(str(e) or "Request timed out", cause=e) from e
@@ -261,16 +271,17 @@ class SyncAPIClient(_BaseClient):
             return _to_attrdict(_json_or_text(resp))
         raise APIConnectionError(str(last_exc) if last_exc else "Request failed")
 
-    def _post(self, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None):
-        return self._request("POST", path, body=body, headers=headers)
+    def _post(self, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None):
+        return self._request("POST", path, body=body, headers=headers, timeout=timeout)
 
-    def _get(self, path: str, *, params: Any = None, headers: Optional[Dict[str, str]] = None):
-        return self._request("GET", path, params=params, headers=headers)
+    def _get(self, path: str, *, params: Any = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None):
+        return self._request("GET", path, params=params, headers=headers, timeout=timeout)
 
-    def _stream(self, method: str, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None):
+    def _stream(self, method: str, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None):
         """Generator de evenimente SSE. Yield-uieste AttrDict per payload `data:`."""
         url = self._url(path)
-        with self._http.stream(method, url, json=body, headers=self._headers(headers)) as resp:
+        req_timeout = timeout if timeout is not None else self.timeout
+        with self._http.stream(method, url, json=body, headers=self._headers(headers), timeout=req_timeout) as resp:
             if not resp.is_success:
                 resp.read()  # corpul trebuie citit inainte de .json()/.text()
                 self._raise_for_status(resp)
@@ -307,13 +318,16 @@ class AsyncAPIClient(_BaseClient):
         body: Any = None,
         params: Any = None,
         headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
     ):
         url = self._url(path)
         last_exc: Optional[Exception] = None
+        req_timeout = timeout if timeout is not None else self.timeout
         for attempt in range(self.max_retries + 1):
             try:
                 resp = await self._http.request(
-                    method, url, json=body, params=params, headers=self._headers(headers)
+                    method, url, json=body, params=params,
+                    headers=self._headers(headers), timeout=req_timeout,
                 )
             except httpx.TimeoutException as e:
                 raise APITimeoutError(str(e) or "Request timed out", cause=e) from e
@@ -330,18 +344,19 @@ class AsyncAPIClient(_BaseClient):
             return _to_attrdict(_json_or_text(resp))
         raise APIConnectionError(str(last_exc) if last_exc else "Request failed")
 
-    async def _post(self, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None):
-        return await self._request("POST", path, body=body, headers=headers)
+    async def _post(self, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None):
+        return await self._request("POST", path, body=body, headers=headers, timeout=timeout)
 
-    async def _get(self, path: str, *, params: Any = None, headers: Optional[Dict[str, str]] = None):
-        return await self._request("GET", path, params=params, headers=headers)
+    async def _get(self, path: str, *, params: Any = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None):
+        return await self._request("GET", path, params=params, headers=headers, timeout=timeout)
 
     async def _stream(
-        self, method: str, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None
+        self, method: str, path: str, body: Any, *, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None
     ) -> AsyncIterator:
         """Generator async de evenimente SSE."""
         url = self._url(path)
-        async with self._http.stream(method, url, json=body, headers=self._headers(headers)) as resp:
+        req_timeout = timeout if timeout is not None else self.timeout
+        async with self._http.stream(method, url, json=body, headers=self._headers(headers), timeout=req_timeout) as resp:
             if not resp.is_success:
                 await resp.aread()  # corpul trebuie citit inainte de .json()/.text()
                 self._raise_for_status(resp)
