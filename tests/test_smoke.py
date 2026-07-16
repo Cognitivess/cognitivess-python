@@ -23,7 +23,47 @@ def test_requires_api_key():
     saved = os.environ.pop("COGNITIVESS_API_KEY", None)
     try:
         with pytest.raises(ValueError):
-            Cognitivess()
+            Cognitivess(env_file=None)  # explicit: no .env fallback
+    finally:
+        if saved is not None:
+            os.environ["COGNITIVESS_API_KEY"] = saved
+
+
+def test_env_file_loaded_as_fallback(tmp_path):
+    """Fara load_dotenv(), SDK-ul citeste COGNITIVESS_API_KEY direct din .env."""
+    import os
+    from cognitivess._base_client import _load_env_file
+
+    saved = os.environ.pop("COGNITIVESS_API_KEY", None)
+    env = tmp_path / ".env"
+    env.write_text(
+        "# comentariu\n"
+        "export COGNITIVESS_API_KEY=\"ssh-ed25519 from-env-file\"\n"
+        "OTHER_VAR=ignored\n",
+        encoding="utf-8",
+    )
+    try:
+        cog = Cognitivess(env_file=str(env))
+        assert cog.api_key == "ssh-ed25519 from-env-file"
+        # cheile deja in env nu se suprascriu
+        os.environ["COGNITIVESS_API_KEY"] = "explicit-wins"
+        cog2 = Cognitivess(env_file=str(env))
+        assert cog2.api_key == "explicit-wins"
+        cog.close()
+        cog2.close()
+    finally:
+        os.environ.pop("COGNITIVESS_API_KEY", None)
+        os.environ.pop("OTHER_VAR", None)
+        if saved is not None:
+            os.environ["COGNITIVESS_API_KEY"] = saved
+
+
+def test_env_file_missing_is_noop(tmp_path):
+    import os
+    saved = os.environ.pop("COGNITIVESS_API_KEY", None)
+    try:
+        with pytest.raises(ValueError):
+            Cognitivess(env_file=str(tmp_path / "nope.env"))
     finally:
         if saved is not None:
             os.environ["COGNITIVESS_API_KEY"] = saved

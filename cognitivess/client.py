@@ -43,6 +43,7 @@ class Cognitivess(SyncAPIClient):
         timeout: float = 60.0,
         max_retries: int = 2,
         default_headers: dict | None = None,
+        env_file: str | None = ".env",
     ):
         super().__init__(
             api_key=api_key,
@@ -50,6 +51,7 @@ class Cognitivess(SyncAPIClient):
             timeout=timeout,
             max_retries=max_retries,
             default_headers=default_headers,
+            env_file=env_file,
         )
         self.chat = Chat(self)
         self.messages = Messages(self)
@@ -68,6 +70,7 @@ class AsyncCognitivess(AsyncAPIClient):
         timeout: float = 60.0,
         max_retries: int = 2,
         default_headers: dict | None = None,
+        env_file: str | None = ".env",
     ):
         super().__init__(
             api_key=api_key,
@@ -75,6 +78,7 @@ class AsyncCognitivess(AsyncAPIClient):
             timeout=timeout,
             max_retries=max_retries,
             default_headers=default_headers,
+            env_file=env_file,
         )
         self.chat = Chat(self)
         self.messages = Messages(self)
