@@ -88,9 +88,10 @@ def test_chat_create_body(monkeypatch):
     cog = Cognitivess(api_key="ssh-ed25519 test")
     captured = {}
 
-    def fake_post(self, path, body, *, headers=None):
+    def fake_post(self, path, body, *, headers=None, timeout=None):
         captured["path"] = path
         captured["body"] = body
+        captured["timeout"] = timeout
         return _to_attrdict({"choices": [{"message": {"content": "ok"}}]})
 
     monkeypatch.setattr(type(cog), "_post", fake_post)
@@ -104,7 +105,26 @@ def test_chat_create_body(monkeypatch):
     assert captured["body"]["model"] == "Cognitivess-1"
     assert captured["body"]["max_tokens"] == 32
     assert captured["body"]["temperature"] == 0.5
+    # timeout nu ajunge in corpul JSON
+    assert "timeout" not in captured["body"]
+    assert captured["timeout"] is None
     assert r.choices[0].message.content == "ok"
+    cog.close()
+
+
+def test_chat_create_timeout_passed_through(monkeypatch):
+    cog = Cognitivess(api_key="ssh-ed25519 test")
+    captured = {}
+
+    def fake_post(self, path, body, *, headers=None, timeout=None):
+        captured["timeout"] = timeout
+        return _to_attrdict({"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr(type(cog), "_post", fake_post)
+    cog.chat.completions.create(
+        model="Cognitivess-1", messages=[{"role": "user", "content": "hi"}], max_tokens=8, timeout=12.5,
+    )
+    assert captured["timeout"] == 12.5
     cog.close()
 
 
@@ -112,7 +132,7 @@ def test_messages_create_body_and_headers(monkeypatch):
     cog = Cognitivess(api_key="ssh-ed25519 test")
     captured = {}
 
-    def fake_post(self, path, body, *, headers=None):
+    def fake_post(self, path, body, *, headers=None, timeout=None):
         captured["path"] = path
         captured["body"] = body
         captured["headers"] = headers
@@ -145,7 +165,7 @@ def test_sse_parse_line():
 def test_stream_yields_chunks(monkeypatch):
     cog = Cognitivess(api_key="ssh-ed25519 test")
 
-    def fake_stream(self, method, path, body, *, headers=None):
+    def fake_stream(self, method, path, body, *, headers=None, timeout=None):
         assert method == "POST" and path == "/chat/completions"
         assert body["stream"] is True
         for payload in [
@@ -239,3 +259,91 @@ def test_retry_after_header_honored(monkeypatch):
     # fara header -> backoff in [base, base+0.25]
     d = _BaseClient._retry_delay(None, 1)
     assert 1.0 <= d <= 1.25
+
+def test_base_url_from_env(monkeypatch):
+    """COGNITIVESS_BASE_URL din env devine base_url, fara base_url= in cod."""
+    import os
+    monkeypatch.setenv("COGNITIVESS_BASE_URL", "https://staging.example.com/v1")
+    saved_key = os.environ.get("COGNITIVESS_API_KEY")
+    monkeypatch.setenv("COGNITIVESS_API_KEY", "ssh-ed25519 test")
+    try:
+        cog = Cognitivess(env_file=None)
+        assert cog.base_url == "https://staging.example.com/v1"
+        # explicit base_url wins over env
+        cog2 = Cognitivess(api_key="ssh-ed25519 test", base_url="https://other/v1", env_file=None)
+        assert cog2.base_url == "https://other/v1"
+        cog.close()
+        cog2.close()
+    finally:
+        if saved_key is None:
+            os.environ.pop("COGNITIVESS_API_KEY", None)
+
+
+def test_base_url_default_when_nothing_set(monkeypatch):
+    monkeypatch.delenv("COGNITIVESS_BASE_URL", raising=False)
+    monkeypatch.setenv("COGNITIVESS_API_KEY", "ssh-ed25519 test")
+    cog = Cognitivess(env_file=None)
+    assert cog.base_url == "https://api.cognitivess.com/v1"
+    cog.close()
+
+
+def test_iter_text_sync(monkeypatch):
+    cog = Cognitivess(api_key="ssh-ed25519 test")
+
+    def fake_stream(self, method, path, body, *, headers=None, timeout=None):
+        for payload in [
+            {"choices": [{"delta": {"content": "Hel"}}]},
+            {"choices": [{"delta": {}}]},          # delta fara content -> skip
+            {"choices": []},                        # choices gol -> skip
+            {"choices": [{"delta": {"content": "lo"}}]},
+        ]:
+            yield _to_attrdict(payload)
+
+    monkeypatch.setattr(type(cog), "_stream", fake_stream)
+    out = "".join(cog.chat.completions.iter_text(
+        model="Cognitivess-1", messages=[{"role": "user", "content": "hi"}],
+    ))
+    assert out == "Hello"
+    cog.close()
+
+
+def test_iter_text_async():
+    import asyncio
+    cog = AsyncCognitivess(api_key="ssh-ed25519 test")
+
+    async def fake_stream(self, method, path, body, *, headers=None, timeout=None):
+        for payload in [
+            {"choices": [{"delta": {"content": "A"}}]},
+            {"choices": [{"delta": {"content": "B"}}]},
+        ]:
+            yield _to_attrdict(payload)
+
+    type(cog)._stream = fake_stream
+    try:
+        async def run():
+            return [t async for t in cog.chat.completions.iter_text(
+                model="Cognitivess-1", messages=[{"role": "user", "content": "hi"}],
+            )]
+        assert asyncio.run(run()) == ["A", "B"]
+    finally:
+        asyncio.run(cog.aclose())
+
+
+def test_models_retrieve(monkeypatch):
+    cog = Cognitivess(api_key="ssh-ed25519 test")
+    captured = {}
+
+    def fake_get(self, path, *, params=None, headers=None, timeout=None):
+        captured["path"] = path
+        return _to_attrdict({"id": "Cognitivess-1", "object": "model"})
+
+    monkeypatch.setattr(type(cog), "_get", fake_get)
+    m = cog.models.retrieve("Cognitivess-1")
+    assert captured["path"] == "/models/Cognitivess-1"
+    assert m.id == "Cognitivess-1"
+    cog.close()
+
+
+def test_py_typed_shipped():
+    import cognitivess, os
+    assert os.path.exists(os.path.join(os.path.dirname(cognitivess.__file__), "py.typed"))
