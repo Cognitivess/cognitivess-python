@@ -134,6 +134,10 @@ class _BaseClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": USER_AGENT,
+            # Marker pentru gateway: identifica cererile ca venind din SDK-ul Python
+            # (folosit in admin dashboard pt defalcare SDK vs CLI vs Claude Code direct).
+            # Gateway-ul citeste X-Cognitivess-Client cu prioritate peste User-Agent.
+            "X-Cognitivess-Client": "sdk",
         }
         h.update(self._default_headers)
         if extra:
