@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.7
+
+### Added
+- **Client-type identification header.** The SDK now sends `X-Cognitivess-Client: sdk`
+  on every request, so the gateway can distinguish SDK users from CLI / direct Claude
+  Code users in the admin dashboard. The gateway reads this header with priority over
+  `User-Agent`.
+
 ## 0.1.6
 
 ### Fixed
